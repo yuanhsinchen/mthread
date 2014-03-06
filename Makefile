@@ -20,7 +20,7 @@ sun:  $(SRC) $(LIB) $(INC)
 	lint -Xc99 $(SRC) $(LIB)
 
 linux: $(SRC) $(LIB) $(INC)
-	gcc -std=c99 $(POSIX_2008) -Wall -Wextra -lpthread -o $(OBJ) $(SRC) $(LIB)
+	gcc $(SRC) -std=c99 $(POSIX_2008) -Wall -Wextra -lpthread -o $(OBJ) $(LIB)
 
 mac: $(SRC) $(LIB) $(INC)
 	gcc -std=c99 -Wall -Wextra -o $(OBJ) $(SRC) $(LIB)

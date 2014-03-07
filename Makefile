@@ -1,9 +1,9 @@
 # CMPSC 473, Project 2, starter kit
 
 # Source, library, include, and object files
-SRC = pr2.c
+SRC = pthread_wrappers.c sem_wrappers.c pr2.c
 LIB = 
-INC = 
+INC =
 OBJ = pr2
 
 # Different versions of the POSIX Standard for Unix

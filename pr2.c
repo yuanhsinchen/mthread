@@ -272,17 +272,17 @@ struct consumer {
 	void *exit_status; /* set via pthread_join() */
 };
 
-void init_buffer(struct buffer **b)
+void init_buffer(struct buffer *b)
 {
-	*b = malloc(sizeof(struct buffer));
-	memset(*b, 0, sizeof(struct buffer));
-	(*b)->array = malloc(LINE_ENTRY * sizeof(struct line));
-	memset((*b)->array, 0, LINE_ENTRY * sizeof(struct line));
+	//b = malloc(sizeof(struct buffer));
+	//memset(b, 0, sizeof(struct buffer));
+	b->array = malloc(LINE_ENTRY * sizeof(struct line));
+	memset(b->array, 0, LINE_ENTRY * sizeof(struct line));
 
-	(*b)->bcount = LINE_ENTRY;
-	sem_init(&(*b)->mutex, 0, 1);
-	sem_init(&(*b)->full, 0, 0);
-	sem_init(&(*b)->empty, 0, (*b)->bcount);
+	b->bcount = LINE_ENTRY;
+	sem_init(&b->mutex, 0, 1);
+	sem_init(&b->full, 0, 0);
+	sem_init(&b->empty, 0, b->bcount);
 	//print_buffer(b);
 }
 
@@ -296,11 +296,11 @@ void print_buffer(struct buffer *b)
 	Sem_getvalue(&b->empty, &empty_val, "print_buffer() empty");
 }
 
-void init_producer(struct producer *p, FILE *fp)
+void init_producer(struct producer *p, FILE *fp, struct buffer *b)
 {
 	p->tid = (pthread_t)-1;
 	p->fp = fp;
-	init_buffer(&p->buffer);	
+	p->buffer = b;
 	p->index = 0;
 	p->exit_status = (void *)-1;
 	p->buffer->array[0].line = malloc(100);
@@ -343,6 +343,7 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 {
 	FILE *fp, *fp1;
 	struct match *mp;
+	struct buffer b;
 	struct producer p;
 	int err;
 
@@ -370,7 +371,8 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 		free(line);
 	}
 #else
-	init_producer(&p, fp);
+	init_buffer(&b);
+	init_producer(&p, fp, &b);
 	Pthread_create(&p.tid, NULL, producer_func, (void *)&p, "producer");
 	Pthread_join(p.tid, &p.exit_status, "producer");
 	//printf("end p2_action\n");

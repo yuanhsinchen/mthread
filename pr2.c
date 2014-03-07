@@ -231,11 +231,13 @@ int cmpstr(struct match *m, char *buffer)
 	char *tmp = buffer;
 	int matches = 0; /* number of match */
 	while ((tmp = strstr(tmp, m->pattern)) != NULL) {
+		printf("matches %d\n", matches);
 		matches ++;
 		/* move the pointer forward in the length of the pattern */
 		/* in order to fine the next match */
 		tmp += strlen(m->pattern);
 	}
+	printf("cmpstr!!!!!\n");
 	/* update struct match */
 	if (matches > 0) {
 		m->matches += matches;
@@ -248,11 +250,13 @@ int cmpstr(struct match *m, char *buffer)
 struct line {
 	char *line;
 	int ccount; /* how manay consumers have accessed the line, for buffer deletion */
+	sem_t mutex;
 };
 
 struct buffer {
 	struct line *array;
 	int bcount; /* number of entry of the buffer */
+	int maxccount; /* if line->ccount == maxccount, free the line */
 	sem_t mutex, full, empty;
 };
 
@@ -272,7 +276,7 @@ struct consumer {
 	void *exit_status; /* set via pthread_join() */
 };
 
-void init_buffer(struct buffer *b)
+void init_buffer(struct buffer *b, int mnum)
 {
 	//b = malloc(sizeof(struct buffer));
 	//memset(b, 0, sizeof(struct buffer));
@@ -280,6 +284,7 @@ void init_buffer(struct buffer *b)
 	memset(b->array, 0, LINE_ENTRY * sizeof(struct line));
 
 	b->bcount = LINE_ENTRY;
+	b->maxccount = mnum;
 	sem_init(&b->mutex, 0, 1);
 	sem_init(&b->full, 0, 0);
 	sem_init(&b->empty, 0, b->bcount);
@@ -301,9 +306,12 @@ void init_producer(struct producer *p, FILE *fp, struct buffer *b)
 	p->tid = (pthread_t)-1;
 	p->fp = fp;
 	p->buffer = b;
+	printf("p->buffer %p\n", p->buffer);
+	printf("p->buffer->array %p\n", p->buffer->array);
+	printf("p->buffer->array[0] %p\n", p->buffer->array[0]);
+
 	p->index = 0;
 	p->exit_status = (void *)-1;
-	p->buffer->array[0].line = malloc(100);
 }
 
 void print_string(char *s)
@@ -327,6 +335,7 @@ void *producer_func(void *arg)
 		sem_wait(&p->buffer->empty);
 		sem_wait(&p->buffer->mutex);
 		p->buffer->array[p->index].line = line;
+		sem_init(&p->buffer->array[p->index].mutex, 0, 1);
 		printf("producer_func: ");
 		print_string(p->buffer->array[p->index].line);
 		p->index++;
@@ -338,6 +347,64 @@ void *producer_func(void *arg)
 	return arg;
 }
 
+void init_consumer(struct consumer *c, struct match *m, struct buffer *b)
+{
+	c->tid = (pthread_t)-1;
+	c->buffer = b;
+	printf("c->buffer %p\n", c->buffer);
+	printf("c->buffer->array %p\n", c->buffer->array);
+	printf("c->buffer->array[0] %p\n", c->buffer->array[0]);
+	c->index = 0;
+	c->m = m;
+	c->exit_status = (void *)-1;
+}
+
+void free_line(struct line *l)
+{
+	free(l->line);
+	l->ccount = 0;
+}
+
+void *consumer_func(void *arg)
+{
+	struct consumer *c = (struct consumer *)arg;
+	int match = 0;
+for(int i=0; i < 6; i++){
+	sem_wait(&c->buffer->full);
+	/* allow threads to read at a same time */
+	printf("c->buffer->array[c->index].line %p\n", c->buffer->array[c->index].line);
+	match += cmpstr(c->m, c->buffer->array[c->index].line);
+	printf("consumer_func\n");
+	/* update ccount for a line */
+	sem_wait(&c->buffer->array[c->index].mutex);
+	c->buffer->array[c->index].ccount++;
+	sem_post(&c->buffer->array[c->index].mutex);
+	sem_post(&c->buffer->full);
+
+	/* if all consumers have accessed the line, free it */
+	if (c->buffer->array[c->index].ccount >= c->buffer->maxccount) {
+		sem_wait(&c->buffer->full);
+		sem_wait(&c->buffer->mutex);
+		free_line(&c->buffer->array[c->index]);
+		sem_post(&c->buffer->mutex);	
+		sem_post(&c->buffer->empty);	
+	}
+
+	c->index++;
+	if (c->index >= c->buffer->bcount)
+		c->index %= c->buffer->bcount;
+
+	/* print to stdout */
+	printf("P2: string %s, line %d, matches %d\n",
+		c->m->pattern, c->m->match_line, c->m->matches);
+}
+#if 0
+	/* write matched line to the pipe */
+	if (match)
+		fwrite(line, sizeof(char), strlen(line), fp1);
+#endif
+}
+
 /* procedure for P2 */
 static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 {
@@ -345,6 +412,7 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 	struct match *mp;
 	struct buffer b;
 	struct producer p;
+	struct consumer c;
 	int err;
 
 	fp = fdopen(fd, "r"); /* use fp as if it had come from fopen() */
@@ -371,10 +439,13 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 		free(line);
 	}
 #else
-	init_buffer(&b);
+	init_buffer(&b, mnum);
 	init_producer(&p, fp, &b);
 	Pthread_create(&p.tid, NULL, producer_func, (void *)&p, "producer");
+	init_consumer(&c, m, &b);
+	Pthread_create(&c.tid, NULL, consumer_func, (void *)&c, "consumer");
 	Pthread_join(p.tid, &p.exit_status, "producer");
+	Pthread_join(c.tid, &c.exit_status, "consumer");
 	//printf("end p2_action\n");
 
 #endif

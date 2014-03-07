@@ -79,9 +79,9 @@ int main(int argc, char *argv[])
 	if ((pipe(fd) < 0) || (pipe(fd1) < 0)) {
 		err_sys("pipe error");
 	}
-	p2_actions(m, mnum, fd[0], fd1[1]); /* read from fd[0], write to fd1[1] */
+//	p2_actions(m, mnum, fd[0], fd1[1]); /* read from fd[0], write to fd1[1] */
 
-#if 0
+#if 1
   	if ((child_pid = fork()) < 0) {
 		err_sys("fork error");
 	} else if (child_pid > 0) { /* this is the parent */
@@ -91,13 +91,11 @@ int main(int argc, char *argv[])
 		p1_actions(ifile, fd[1]); /* write to fd[1] */
 		if (waitpid(child_pid, NULL, 0) < 0) /* wait for child */
 			{ err_sys("waitpid error"); }
-		printf("p1_action finished\n");
 	} else { /* this is the child of first fork() */
 			close(fd[1]); /* close fd write endpoint */
 			close(fd1[0]); /* close fd1 read endpoint */
 			p2_actions(m, mnum, fd[0], fd1[1]); /* read from fd[0], write to fd1[1] */
 			deletem(m);
-		printf("p2_action finished\n");
 
 #if 0
 		if ((gchild_pid = fork()) < 0) {
@@ -280,9 +278,6 @@ void init_buffer(struct buffer **b)
 	memset(*b, 0, sizeof(struct buffer));
 	(*b)->array = malloc(LINE_ENTRY * sizeof(struct line));
 	memset((*b)->array, 0, LINE_ENTRY * sizeof(struct line));
-	//char *buf = malloc(100);
-	//(&b->array[0])->line = buf;
-	//printf("(&b->array[0])->line %p\n", (&b->array[0])->line);
 
 	(*b)->bcount = LINE_ENTRY;
 	sem_init(&(*b)->mutex, 0, 1);
@@ -290,16 +285,6 @@ void init_buffer(struct buffer **b)
 	sem_init(&(*b)->empty, 0, (*b)->bcount);
 	//print_buffer(b);
 }
-
-#if 0
-void print_line(struct buffer *b)
-{
-	for (int i = 0; i < b->bcount; i++) {
-		for ()
-	}
-		printf("");
-}
-#endif
 
 void print_buffer(struct buffer *b)
 {
@@ -313,13 +298,20 @@ void print_buffer(struct buffer *b)
 
 void init_producer(struct producer *p, FILE *fp)
 {
-	//p->tid = (pthread_t)-1;
-	//p->fp = fp;
+	p->tid = (pthread_t)-1;
+	p->fp = fp;
 	init_buffer(&p->buffer);	
-	//p->index = 0;
-	//p->exit_status = (void *)-1;
-	//p->buffer->array[0].line = malloc(100);
-	printf("p->buffer->array[0] %p\n", p->buffer->array[0]);
+	p->index = 0;
+	p->exit_status = (void *)-1;
+	p->buffer->array[0].line = malloc(100);
+}
+
+void print_string(char *s)
+{
+	int len = strlen(s);
+	for (int i = 0; i < len; i++)
+		printf("%c", s[i]);
+	printf("\n");
 }
 
 void *producer_func(void *arg)
@@ -329,18 +321,19 @@ void *producer_func(void *arg)
 	while (1) {
 		char *line = readline(p->fp);
 		//printf("p->buffer->array[%d] %p\n", p->index,  (&p->buffer->array[p->index])->line);
-		printf("p->buffer->array[%d]\n", p->index);
+		//printf("p->buffer->array[%d]\n", p->index);
 		if (line == NULL)
 			break;
-		//sem_wait(&p->buffer->empty);
-		//sem_wait(&p->buffer->mutex);
-		//(&p->buffer->array[p->index])->line = malloc(100);
-		printf("producer_func: line\n");
+		sem_wait(&p->buffer->empty);
+		sem_wait(&p->buffer->mutex);
+		p->buffer->array[p->index].line = line;
+		printf("producer_func: ");
+		print_string(p->buffer->array[p->index].line);
 		p->index++;
 		if (p->index >= p->buffer->bcount)
 			p->index %= p->buffer->bcount;
-		//sem_post(&p->buffer->mutex);
-		//sem_post(&p->buffer->full);
+		sem_post(&p->buffer->mutex);
+		sem_post(&p->buffer->full);
 	}
 	return arg;
 }
@@ -378,9 +371,9 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 	}
 #else
 	init_producer(&p, fp);
-	//Pthread_create(&p.tid, NULL, producer_func, (void *)&p, "producer");
-	//Pthread_join(p.tid, &p.exit_status, "producer");
-	printf("end p2_action\n");
+	Pthread_create(&p.tid, NULL, producer_func, (void *)&p, "producer");
+	Pthread_join(p.tid, &p.exit_status, "producer");
+	//printf("end p2_action\n");
 
 #endif
 	fclose(fp);

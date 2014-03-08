@@ -112,7 +112,7 @@ void enqueue(struct queue *q, void *c)
 	q->queue[q->index] = c;
 	q->index++;
 	printf("enqueue %p index %d c %p\n", q, q->index, c);
-	print_string((char *)(((struct line*)c)->line));
+	//print_string((char *)(((struct line*)c)->line));
 }
 
 void *dequeue(struct queue *q)
@@ -125,7 +125,7 @@ void *dequeue(struct queue *q)
 	q->index--;
 
 	printf("dequeue %p index %d c %p\n", q, q->index, c);
-	print_string((char *)(((struct line*)c)->line));
+	//print_string((char *)(((struct line*)c)->line));
 	return c;
 }
 
@@ -405,11 +405,10 @@ void *producer_func(void *arg)
 			sem_wait(&p->buffer[i].empty);
 			sem_wait(&p->buffer[i].mutex);
 			enqueue(p->buffer[i].q, (void *)l);
-			print_string(l->line);
 			sem_post(&p->buffer[i].mutex);
 			sem_post(&p->buffer[i].full);
 		}
-		//enqueue(p->line, (void *)l);
+		enqueue(p->line, (void *)l);
 	}
 
 	for (int i = 0; i < p->cnum; i++) {
@@ -448,14 +447,15 @@ void *consumer_func(void *arg)
 	}
 	printf("consumer_func(), thread 0x%jx, tid 0x%jx, queue %p starting\n", (uintmax_t)pthread_self(), (uintmax_t)c->tid, c->buffer->q);
 
-	sem_wait(&c->buffer->full);
+	//sem_wait(&c->buffer->full);
 	while (!is_q_empty(c->buffer->q) || !c->buffer->q->nomore){
 	/* queue is not empty */
-		//sem_wait(&c->buffer->full);
+		sem_wait(&c->buffer->full);
+		sem_wait(&c->buffer->mutex);
 		l = (struct line*)dequeue(c->buffer->q);
-		//sem_post(&c->buffer->empty);
+		sem_post(&c->buffer->mutex);
+		sem_post(&c->buffer->empty);
 		//printf("TID: 0x%x consumer_func: dequeue line %p\n", c->tid, l);
-		print_string(l->line);
 		if (cmpstr(c->m, l->line))
 			l->match = true;
 		/* update ccount for a line */
@@ -476,7 +476,7 @@ void *consumer_func(void *arg)
 	}
 #endif
 	}
-	sem_post(&c->buffer->empty);
+	//sem_post(&c->buffer->empty);
 	printf("consumer_func(), thread 0x%jx, tid 0x%jx, queue %p ended\n", (uintmax_t)pthread_self(), (uintmax_t)c->tid, c->buffer->q);
 #if 0
 	/* print to stdout */

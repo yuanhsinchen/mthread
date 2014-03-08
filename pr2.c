@@ -38,6 +38,39 @@ struct queue{
 	bool nomore;
 };
 
+struct line {
+	char *line;
+	int ccount; /* how manay consumers have accessed the line, for buffer deletion */
+	bool match;
+	sem_t mutex;
+};
+
+struct buffer {
+	//struct line *array;
+	struct queue *q;
+	int bcount; /* number of entry of the buffer */
+	int maxccount; /* if line->ccount == maxccount, free the line */
+	sem_t mutex, full, empty;
+};
+
+struct producer {
+	pthread_t tid; /* set via pthread_create() */
+	FILE *fp;
+	struct buffer *buffer;
+	int cnum;
+	//int index; /* last visited index */
+	struct queue *line; /* queue all lines */
+	void *exit_status; /* set via pthread_join() */
+};
+
+struct consumer {
+	pthread_t tid; /* set via pthread_create() */
+	struct buffer *buffer;
+	struct match *m;
+	void *exit_status; /* set via pthread_join() */
+};
+
+
 void err_sys(char *msg); /* print message and quit */
 
 /* In a pipe, the parent is upstream, and the child is downstream, connected by */
@@ -51,6 +84,14 @@ void deletem(struct match *m);
 
 #define BUFFER_SIZE 4096
 #define QUEUE_SIZE 20
+
+void print_string(char *s)
+{
+	int len = strlen(s);
+	for (int i = 0; i < len; i++)
+		printf("%c", s[i]);
+	printf("\n");
+}
 
 void init_queue(struct queue *q)
 {
@@ -70,19 +111,21 @@ void enqueue(struct queue *q, void *c)
 	}
 	q->queue[q->index] = c;
 	q->index++;
-	printf("enqueue %p index %d\n\n", q, q->index);
+	printf("enqueue %p index %d c %p\n", q, q->index, c);
+	print_string((char *)(((struct line*)c)->line));
 }
 
 void *dequeue(struct queue *q)
 {
 	void *c = q->queue[0];
 
-	for (int i = 0; i < q->index - 2; i++)
+	for (int i = 0; i < q->index - 1; i++)
 		q->queue[i] = q->queue[i + 1];
 
 	q->index--;
 
-	printf("dequeue %p index %d\n\n", q->queue, q->index);
+	printf("dequeue %p index %d c %p\n", q, q->index, c);
+	print_string((char *)(((struct line*)c)->line));
 	return c;
 }
 
@@ -299,55 +342,17 @@ int cmpstr(struct match *m, char *buffer)
 	return 0;
 }
 
-struct line {
-	char *line;
-	int ccount; /* how manay consumers have accessed the line, for buffer deletion */
-	bool match;
-	sem_t mutex;
-};
-
-struct buffer {
-	//struct line *array;
-	struct queue *q;
-	int bcount; /* number of entry of the buffer */
-	int maxccount; /* if line->ccount == maxccount, free the line */
-	sem_t mutex, full, empty;
-};
-
-struct producer {
-	pthread_t tid; /* set via pthread_create() */
-	FILE *fp;
-	struct buffer *buffer;
-	int cnum;
-	//int index; /* last visited index */
-	struct queue *line; /* queue all lines */
-	void *exit_status; /* set via pthread_join() */
-};
-
-struct consumer {
-	pthread_t tid; /* set via pthread_create() */
-	struct buffer *buffer;
-	struct match *m;
-	void *exit_status; /* set via pthread_join() */
-};
-
 void init_buffer(struct buffer *b, int mnum)
 {
-	//b = malloc(sizeof(struct buffer));
-	//memset(b, 0, sizeof(struct buffer));
-	//b->array = malloc(LINE_ENTRY * sizeof(struct line));
-	//memset(b->array, 0, LINE_ENTRY * sizeof(struct line));
 	b->q = malloc(sizeof(struct queue));
 	printf("init_buffer b %p b->q %p\n", b,  b->q);
 	init_queue(b->q);
 
 	b->bcount = b->q->size;
 	b->maxccount = mnum;
-	//printf("b->maxccount %d", b->maxccount);
 	sem_init(&b->mutex, 0, 1);
 	sem_init(&b->full, 0, 0);
 	sem_init(&b->empty, 0, b->bcount);
-	//print_buffer(b);
 }
 
 void print_buffer(struct buffer *b)
@@ -359,6 +364,7 @@ void print_buffer(struct buffer *b)
 	Sem_getvalue(&b->full , &full_val , "print_buffer() full ");
 	Sem_getvalue(&b->empty, &empty_val, "print_buffer() empty");
 }
+
 
 void init_producer(struct producer *p, FILE *fp, struct buffer *b, int mnum)
 {
@@ -377,13 +383,6 @@ void init_producer(struct producer *p, FILE *fp, struct buffer *b, int mnum)
 	p->exit_status = (void *)-1;                                  
 }
 
-void print_string(char *s)
-{
-	int len = strlen(s);
-	for (int i = 0; i < len; i++)
-		printf("%c", s[i]);
-	printf("\n");
-}
 
 void *producer_func(void *arg)
 {
@@ -406,11 +405,11 @@ void *producer_func(void *arg)
 			sem_wait(&p->buffer[i].empty);
 			sem_wait(&p->buffer[i].mutex);
 			enqueue(p->buffer[i].q, (void *)l);
+			print_string(l->line);
 			sem_post(&p->buffer[i].mutex);
 			sem_post(&p->buffer[i].full);
-			printf("cnum %d\n", p->cnum);
 		}
-		enqueue(p->line, (void *)l);
+		//enqueue(p->line, (void *)l);
 	}
 
 	for (int i = 0; i < p->cnum; i++) {
@@ -456,6 +455,7 @@ void *consumer_func(void *arg)
 		l = (struct line*)dequeue(c->buffer->q);
 		//sem_post(&c->buffer->empty);
 		//printf("TID: 0x%x consumer_func: dequeue line %p\n", c->tid, l);
+		print_string(l->line);
 		if (cmpstr(c->m, l->line))
 			l->match = true;
 		/* update ccount for a line */
@@ -531,9 +531,7 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 	}
 	init_producer(&p, fp, b, mnum);
 	Pthread_create(&p.tid, NULL, producer_func, (void *)&p, "producer");
-	Pthread_join(p.tid, &p.exit_status, "producer");
-	printf("end p2_action\n");
-#if 0
+#if 1
 	for (mp = m; mp != NULL; mp = mp->next) {
 		init_consumer(&c[n], mp, &b[n]);
 		Pthread_create(&c[n].tid, NULL, consumer_func, (void *)&c[n], "consumer");

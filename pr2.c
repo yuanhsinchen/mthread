@@ -124,7 +124,7 @@ void *dequeue(struct queue *q)
 
 	q->index--;
 
-	printf("dequeue %p index %d c %p\n", q, q->index, c);
+	//printf("dequeue %p index %d c %p\n", q, q->index, c);
 	//print_string((char *)(((struct line*)c)->line));
 	return c;
 }
@@ -175,9 +175,6 @@ int main(int argc, char *argv[])
 	if ((pipe(fd) < 0) || (pipe(fd1) < 0)) {
 		err_sys("pipe error");
 	}
-//	p2_actions(m, mnum, fd[0], fd1[1]); /* read from fd[0], write to fd1[1] */
-
-#if 1
   	if ((child_pid = fork()) < 0) {
 		err_sys("fork error");
 	} else if (child_pid > 0) { /* this is the parent */
@@ -188,12 +185,6 @@ int main(int argc, char *argv[])
 		if (waitpid(child_pid, NULL, 0) < 0) /* wait for child */
 			{ err_sys("waitpid error"); }
 	} else { /* this is the child of first fork() */
-			close(fd[1]); /* close fd write endpoint */
-			close(fd1[0]); /* close fd1 read endpoint */
-			p2_actions(m, mnum, fd[0], fd1[1]); /* read from fd[0], write to fd1[1] */
-			deletem(m);
-
-#if 0
 		if ((gchild_pid = fork()) < 0) {
 			err_sys("fork error");
 		} else if (gchild_pid > 0) { /* this is the parent of 2nd fork() */
@@ -207,11 +198,9 @@ int main(int argc, char *argv[])
 			close(fd1[1]); /* close fd1 write endpoint */
 			close(fd[0]);
 			close(fd[1]);
-			//p3_actions(ofile, fd1[0]); /* read from fd1[0] */
+			p3_actions(ofile, fd1[0]); /* read from fd1[0] */
 		}
-#endif
 	}
-#endif
   return 0;
 }
 
@@ -543,6 +532,12 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 	//printf("end p2_action\n");
 #endif
 #endif
+	while(!is_q_empty(p.line)) {
+		struct line *l = dequeue(p.line);
+		if (l->match)
+			//print_string(l->line);
+			fwrite(l->line, sizeof(char), strlen(l->line), fp1);
+	}
 	fclose(fp);
 	fclose(fp1);
 

@@ -1,7 +1,7 @@
 # CMPSC 473, Project 2, starter kit
 
 # Source, library, include, and object files
-SRC = pthread_wrappers.c sem_wrappers.c pr2.c
+SRC = pr2.c
 LIB = 
 INC =
 OBJ = pr2

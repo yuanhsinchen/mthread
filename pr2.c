@@ -46,6 +46,7 @@ struct buffer {
 	struct queue *q;
 	int bcount; /* number of entry of the buffer */
 	int maxccount; /* if line->ccount == maxccount, free the line */
+	bool nomore;
 	sem_t mutex, full, empty;
 };
 
@@ -86,7 +87,7 @@ void createm(struct match **m, int *mnum, char *pattern);
 void deletem(struct match *m);
 
 #define BUFFER_SIZE 4096
-#define QUEUE_SIZE 20
+#define QUEUE_SIZE 1000
 
 void print_string(char *s)
 {
@@ -108,6 +109,7 @@ void enqueue(struct queue *q, void *c)
 	if (q->index == q->size) {
 		q->size += QUEUE_SIZE;
 		q->queue = realloc(q->queue, sizeof(void *) * q->size);
+		printf("enqueue: realloc queue to %d bytes\n", q->size);
 	}
 	q->queue[q->index] = c;
 	q->index++;
@@ -327,6 +329,7 @@ void init_buffer(struct buffer *b, int mnum)
 
 	b->bcount = b->q->size;
 	b->maxccount = mnum;
+	b->nomore = false;
 	sem_init(&b->mutex, 0, 1);
 	sem_init(&b->full, 0, 0);
 	sem_init(&b->empty, 0, b->bcount);
@@ -338,8 +341,6 @@ void init_producer(struct producer *p, FILE *fp, struct buffer *b, int mnum)
 	p->fp = fp;
 	p->buffer = b;
 	p->cnum = mnum;
-	p->line = malloc(sizeof(struct queue));
-	init_queue(p->line);
 	p->exit_status = (void *)-1;                                  
 }
 
@@ -352,10 +353,12 @@ void *producer_func(void *arg)
 		struct line *l;
 		if (line == NULL)
 			break;
+
 		l = malloc(sizeof(struct line));
 		l->line = line;
 		l->match = false;
 		sem_init(&l->mutex, 0, 1);
+
 		for (int i = 0; i < p->cnum; i++) {
 			sem_wait(&p->buffer[i].empty);
 			sem_wait(&p->buffer[i].mutex);
@@ -363,7 +366,11 @@ void *producer_func(void *arg)
 			sem_post(&p->buffer[i].mutex);
 			sem_post(&p->buffer[i].full);
 		}
-		enqueue(p->line, (void *)l);
+	}
+	for (int i = 0; i < p->cnum; i++) {
+		sem_wait(&p->buffer[i].mutex);
+		p->buffer[i].nomore = true;
+		sem_post(&p->buffer[i].mutex);
 	}
 
 	return arg;
@@ -378,19 +385,12 @@ void init_consumer(struct consumer *c, struct match *m, struct buffer *b, struct
 	c->exit_status = (void *)-1;
 }
 
-void free_line(struct line *l)
-{
-	if (l->match)
-		l->line = NULL;
-	else
-		free(l->line);
-	l->match = false;
-}
-
 void *consumer_func(void *arg)
 {
 	struct consumer *c = (struct consumer *)arg;
 	struct line *l;
+	bool nomore;
+
 	if (c == NULL) {
 		printf("consumer_func(), thread 0x%jx, NULL arg\n", (uintmax_t)pthread_self());
 		exit(1);
@@ -412,8 +412,10 @@ void *consumer_func(void *arg)
 				sem_post(&c->matched->full);
 			}
 		}
-		/* queue is not empty */
-	} while (!is_q_empty(c->buffer->q));
+		sem_wait(&c->buffer->mutex);
+		nomore = c->buffer->nomore;
+		sem_post(&c->buffer->mutex);
+	} while (!is_q_empty(c->buffer->q) && !nomore); /* queue is not empty */
 
 	return arg;
 }

@@ -35,7 +35,6 @@ struct queue{
 	void **queue;
 	int size;
 	int index; /* next index of queue */
-	bool nomore;
 };
 
 struct line {
@@ -66,10 +65,17 @@ struct producer {
 struct consumer {
 	pthread_t tid; /* set via pthread_create() */
 	struct buffer *buffer;
+	struct buffer *matched;
 	struct match *m;
 	void *exit_status; /* set via pthread_join() */
 };
 
+struct copy_line {
+	pthread_t tid;
+	FILE *fp;
+	struct buffer *buffer;
+	void *exit_status;
+};
 
 void err_sys(char *msg); /* print message and quit */
 
@@ -100,7 +106,6 @@ void init_queue(struct queue *q)
 //	printf("q->queue %p\n\n", q->queue);
 	q->size = QUEUE_SIZE;
 	q->index = 0;
-	q->nomore = false;
 }
 
 void enqueue(struct queue *q, void *c)
@@ -111,7 +116,7 @@ void enqueue(struct queue *q, void *c)
 	}
 	q->queue[q->index] = c;
 	q->index++;
-	printf("enqueue %p index %d c %p\n", q, q->index, c);
+	//printf("enqueue %p index %d c %p\n", q, q->index, c);
 	//print_string((char *)(((struct line*)c)->line));
 }
 
@@ -132,10 +137,10 @@ void *dequeue(struct queue *q)
 bool is_q_empty(struct queue *q)
 {
 	if (q->index <= 0) {
-		printf("queue %p is empty!\n");
+	//	printf("queue %p is empty!\n", q);
 		return true;
 	} else {
-		printf("queue %p is not empty!\n");
+	//	printf("queue %p has elements\n", q);
 		return false;
 	}
 }
@@ -321,7 +326,7 @@ int cmpstr(struct match *m, char *buffer)
 		/* in order to fine the next match */
 		tmp += strlen(m->pattern);
 	}
-	printf("cmpstr: buffer %p matches %d\n", buffer, matches);
+	//printf("cmpstr: buffer %p matches %d\n", buffer, matches);
 	/* update struct match */
 	if (matches > 0) {
 		m->matches += matches;
@@ -334,7 +339,7 @@ int cmpstr(struct match *m, char *buffer)
 void init_buffer(struct buffer *b, int mnum)
 {
 	b->q = malloc(sizeof(struct queue));
-	printf("init_buffer b %p b->q %p\n", b,  b->q);
+	//printf("init_buffer b %p b->q %p\n", b,  b->q);
 	init_queue(b->q);
 
 	b->bcount = b->q->size;
@@ -368,7 +373,7 @@ void init_producer(struct producer *p, FILE *fp, struct buffer *b, int mnum)
 	//p->index = 0;
 	p->line = malloc(sizeof(struct queue));
 	init_queue(p->line);
-	printf("init_producer : init_queue\n");
+	//printf("init_producer : init_queue\n");
 	p->exit_status = (void *)-1;                                  
 }
 
@@ -380,11 +385,8 @@ void *producer_func(void *arg)
 	while (1) {
 		char *line = readline(p->fp);
 		struct line *l;
-		//printf("p->buffer->array[%d] %p\n", p->index,  (&p->buffer->array[p->index])->line);
-		//printf("p->buffer->array[%d]\n", p->index);
 		if (line == NULL)
 			break;
-
 		l = malloc(sizeof(struct line));
 		l->line = line;
 		l->ccount = 0;
@@ -396,22 +398,19 @@ void *producer_func(void *arg)
 			enqueue(p->buffer[i].q, (void *)l);
 			sem_post(&p->buffer[i].mutex);
 			sem_post(&p->buffer[i].full);
+			//printf("enqueue %p\n", p->buffer[i].q);
 		}
 		enqueue(p->line, (void *)l);
 	}
 
-	for (int i = 0; i < p->cnum; i++) {
-		p->buffer[i].q->nomore = true;
-	printf("pruducer %d finished\n", i);}
-
 	return arg;
 }
 
-void init_consumer(struct consumer *c, struct match *m, struct buffer *b)
+void init_consumer(struct consumer *c, struct match *m, struct buffer *b, struct buffer *matched)
 {
 	c->tid = (pthread_t)-1;
 	c->buffer = b;
-	printf("c->buffer %p\n", c->buffer);
+	c->matched = matched;
 	c->m = m;
 	c->exit_status = (void *)-1;
 }
@@ -434,10 +433,10 @@ void *consumer_func(void *arg)
 		printf("consumer_func(), thread 0x%jx, NULL arg\n", (uintmax_t)pthread_self());
 		exit(1);
 	}
-	printf("consumer_func(), thread 0x%jx, tid 0x%jx, queue %p starting\n", (uintmax_t)pthread_self(), (uintmax_t)c->tid, c->buffer->q);
+	//printf("consumer_func(), thread 0x%jx, tid 0x%jx, queue %p starting\n", (uintmax_t)pthread_self(), (uintmax_t)c->tid, c->buffer->q);
 
-	//sem_wait(&c->buffer->full);
-	while (!is_q_empty(c->buffer->q) || !c->buffer->q->nomore){
+	//while (!is_q_empty(c->buffer->q) || !c->buffer->q->nomore){
+	do{
 	/* queue is not empty */
 		sem_wait(&c->buffer->full);
 		sem_wait(&c->buffer->mutex);
@@ -445,8 +444,16 @@ void *consumer_func(void *arg)
 		sem_post(&c->buffer->mutex);
 		sem_post(&c->buffer->empty);
 		//printf("TID: 0x%x consumer_func: dequeue line %p\n", c->tid, l);
-		if (cmpstr(c->m, l->line))
-			l->match = true;
+		if (cmpstr(c->m, l->line)) {
+			if (!l->match) {
+				l->match = true;
+				sem_wait(&c->matched->empty);
+				sem_wait(&c->matched->mutex);
+				enqueue(c->matched->q, (void *)l);
+				sem_post(&c->matched->mutex);
+				sem_post(&c->matched->full);
+			}
+		}
 		/* update ccount for a line */
 		sem_wait(&l->mutex);
 		l->ccount++;
@@ -464,9 +471,9 @@ void *consumer_func(void *arg)
 		}
 	}
 #endif
-	}
+	} while (!is_q_empty(c->buffer->q));
 	//sem_post(&c->buffer->empty);
-	printf("consumer_func(), thread 0x%jx, tid 0x%jx, queue %p ended\n", (uintmax_t)pthread_self(), (uintmax_t)c->tid, c->buffer->q);
+	//printf("consumer_func(), thread 0x%jx, tid 0x%jx, queue %p ended\n", (uintmax_t)pthread_self(), (uintmax_t)c->tid, c->buffer->q);
 #if 0
 	/* print to stdout */
 	printf("P2: string %s, line %d, matches %d\n",
@@ -477,6 +484,32 @@ void *consumer_func(void *arg)
 	if (match)
 		fwrite(line, sizeof(char), strlen(line), fp1);
 #endif
+	return arg;
+}
+
+void init_copyline(struct copy_line *c, struct buffer *matched, FILE* fp)
+{
+	c->tid = (pthread_t)-1;
+	c->buffer = matched;
+	c->fp = fp;
+	c->exit_status = (void *)-1;
+}
+
+void *copy_matched(void *arg)
+{
+	struct copy_line *c = (struct copy_line *)arg;
+	struct line *l;
+
+	do{
+		sem_wait(&c->buffer->full);
+		sem_wait(&c->buffer->mutex);
+		l = (struct line*)dequeue(c->buffer->q);
+		sem_post(&c->buffer->mutex);
+		sem_post(&c->buffer->empty);
+		fwrite(l->line, sizeof(char), strlen(l->line), c->fp);
+	} while(!is_q_empty(c->buffer->q));
+
+	return arg;
 }
 
 /* procedure for P2 */
@@ -487,7 +520,8 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 	struct buffer b[mnum];
 	struct producer p;
 	struct consumer c[mnum];
-	int err;
+	struct buffer matched;
+	struct copy_line cl;
 	int n = 0;
 
 	fp = fdopen(fd, "r"); /* use fp as if it had come from fopen() */
@@ -514,30 +548,36 @@ static void p2_actions(struct match *m, int mnum, int fd, int fd1)
 		free(line);
 	}
 #else
-	for (int i = 0; i < mnum; i++) {
+	for (int i = 0; i < mnum; i++)
 		init_buffer(&b[i], mnum);
-		printf("b[%d].q %p\n", i, b[i].q);
-	}
+
 	init_producer(&p, fp, b, mnum);
 	Pthread_create(&p.tid, NULL, producer_func, (void *)&p, "producer");
 #if 1
+	init_buffer(&matched, 1); /* init buffer for matched lines */
 	for (mp = m; mp != NULL; mp = mp->next) {
-		init_consumer(&c[n], mp, &b[n]);
+		init_consumer(&c[n], mp, &b[n], &matched);
 		Pthread_create(&c[n].tid, NULL, consumer_func, (void *)&c[n], "consumer");
 		n++;
 	}
-	Pthread_join(p.tid, &p.exit_status, "producer");
 	for (int i = 0; i < mnum; i++)
 		Pthread_join(c[i].tid, &c[i].exit_status, "consumer");
+	Pthread_join(p.tid, &p.exit_status, "producer");
+	init_copyline(&cl, &matched, fp1);
+	Pthread_create(&cl.tid, NULL, copy_matched, (void *)&cl, "copy_matched");
+
+	Pthread_join(cl.tid, &cl.exit_status, "copy_matched");
 	//printf("end p2_action\n");
 #endif
 #endif
+#if 0
 	while(!is_q_empty(p.line)) {
 		struct line *l = dequeue(p.line);
 		if (l->match)
 			//print_string(l->line);
 			fwrite(l->line, sizeof(char), strlen(l->line), fp1);
 	}
+#endif
 	fclose(fp);
 	fclose(fp1);
 
